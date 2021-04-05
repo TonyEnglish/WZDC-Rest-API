@@ -20,7 +20,7 @@ This APi is intended to make data collected by the [Work Zone Data Collection To
 `https://wzdc-rest-api.azurewebsites.net/rsm-xml/?state=Colorado`
 
 #### Query RSM {xml} files by zipcode
-`https://wzdc-rest-api.azurewebsites.net/wzdx/?zipcode=80528`
+`https://wzdc-rest-api.azurewebsites.net/wzdx/?zip_code=80528`
 
 ### Download individual filed
 #### Download individual WZDx file by name
