@@ -4,10 +4,19 @@ import hashlib
 import uuid
 import math
 import re
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Header, HTTPException, status, Request, Query
+from models import Token
+
+from fastapi import FastAPI, Header, HTTPException, status, Request, Query, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
+
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token/")
+
+epoch = datetime.utcfromtimestamp(0)
 
 auth_email = os.environ['auth_contact_email']
 
@@ -15,7 +24,7 @@ app = FastAPI(
     title="Work Zone Data Collection Tool Rest API",
     description='This API hosts work zone data collected by the WZDC ' +
     '(work zone data collection) tool. This data includes RSM messages, both in xml and uper (binary) formats. This API ' +
-    f'requires an APi key in the header. Contact <a href="mailto: {auth_email}">{auth_email}</a> for more information on how to acquire and use an API key.',
+    f'requires an APi key in the header. Contact <a href="mailto: {auth_email}">{auth_email}</a> or visit <a href="https://github.com/TonyEnglish/WZDC-Rest-API">https://github.com/TonyEnglish/WZDC-Rest-API</a> for more information on how to acquire and use an API key.',
     docs_url="/",
 )
 
@@ -27,7 +36,10 @@ blob_service_client = BlobServiceClient.from_connection_string(
 cnxn = pyodbc.connect(sql_conn_str)
 cursor = cnxn.cursor()
 
-storedProcFind = os.environ['stored_procedure_find_key']
+storedProcFindKey = os.environ['stored_procedure_find_key']
+# exec create_token @token_hash = '{0}', @type = '{1}', @expires = '{2}'
+storedProcCreateToken = os.environ['stored_procedure_create_token']
+storedProcFindToken = os.environ['stored_procedure_find_token']
 
 authorization_key_header = 'auth_key'
 
@@ -55,9 +67,87 @@ file_types_dict = {
 }
 
 
+def getCurrentTime():
+    return datetime.utcnow()
+
+
+def parseDateTime(time_str):
+    try:
+        return datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S.%f')
+    except:
+        return None
+
+
+def getExperitationTime():
+    return (datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+
+def get_current_token(access_token: str = Depends(oauth2_scheme)):
+    key_hash = str(hashlib.sha256(access_token.encode()).hexdigest())
+    row = find_token(key_hash)
+    time_expires = None
+    if row:
+        time_expires = find_token(key_hash)[0]
+    if not time_expires:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token not found. Use /auth/token to get a token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    elif time_expires >= getCurrentTime():
+        return True
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def get_current_active_token(token_valid: bool = Depends(get_current_token)):
+    return token_valid
+
+
+def find_token(token_hash):
+    cursor.execute(storedProcFindToken.format(token_hash))
+
+    row = cursor.fetchone()
+
+    if row:
+        return row
+    else:
+        return None
+
+
+@app.post("/auth/token/")
+async def get_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    valid = authenticate_key(form_data.password)
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Password Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = Token(
+        access_token=str(uuid.uuid4()),
+        token_type="Bearer",
+        token_expires=getExperitationTime()
+    )
+
+    token_hash = str(hashlib.sha256(token.access_token.encode()).hexdigest())
+
+    query = storedProcCreateToken.format(
+        token_hash, token.token_type, token.token_expires)
+
+    cursor.execute(query)
+    cnxn.commit()
+
+    return token
+
+
 @app.get("/wzdx", tags=["wzdx-list"])
-def get_wzdx_files_list(request: Request,
-                        center: str = Query('', title='Center', description='Center of query location, in the format "lat,long"',
+def get_wzdx_files_list(center: str = Query('', title='Center', description='Center of query location, in the format "lat,long"',
                                             regex='^(-?\\d+(\\.\\d+)?),\\s*(-?\\d+(\\.\\d+)?)$'),
                         distance: float = Query(
                             0, title='Distance', description='Maximum distance (in km) from center location'),
@@ -67,13 +157,9 @@ def get_wzdx_files_list(request: Request,
                             None, title='State', description='State'),
                         zip_code: str = Query(
                             None, title='Zip Code', description='Zip code'),
+                        token_valid: bool = Depends(get_current_token)
                         ):
     file_type = 'wzdx'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     check_dist = False
     ref_loc = parseCoordinates(center)
@@ -98,20 +184,14 @@ def get_wzdx_files_list(request: Request,
 
 
 @app.get("/wzdx/{file_name}", tags=["wzdx-file"])
-def get_wzdx_file(request: Request, file_name: str):
+def get_wzdx_file(file_name: str, token_valid: bool = Depends(get_current_token)):
     file_type = 'wzdx'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     return getFilesListByName(file_type, file_name, container_name)
 
 
 @app.get("/rsm-xml", tags=["xml-list"])
-def get_rsm_files_list_location_filter(request: Request,
-                                       center: str = Query('', title='Center', description='Center of query location, in the format: lat,long',
+def get_rsm_files_list_location_filter(center: str = Query('', title='Center', description='Center of query location, in the format: lat,long',
                                                            regex='^(-?\\d+(\\.\\d+)?),\\s*(-?\\d+(\\.\\d+)?)$'),
                                        distance: float = Query(
                                            0, title='Distance', description='Maximum distance (in km) from center location'),
@@ -121,13 +201,10 @@ def get_rsm_files_list_location_filter(request: Request,
                                            None, title='State', description='State'),
                                        zip_code: str = Query(
                                            None, title='Zip Code', description='Zip code'),
+                                       token_valid: bool = Depends(
+                                           get_current_token)
                                        ):
     file_type = 'rsm-xml'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     check_dist = False
     ref_loc = parseCoordinates(center)
@@ -152,20 +229,14 @@ def get_rsm_files_list_location_filter(request: Request,
 
 
 @app.get("/rsm-xml/{file_name}", tags=["xml-file"])
-def get_rsm_file(request: Request, file_name: str):
+def get_rsm_file(file_name: str, token_valid: bool = Depends(get_current_token)):
     file_type = 'rsm-xml'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     return getFilesListByName(file_type, file_name, container_name)
 
 
 @app.get("/rsm-uper", tags=["uper-list"])
-def get_rsm_uper_files_list(request: Request,
-                            center: str = Query('', title='Center', description='Center of query location, in the format: lat,long',
+def get_rsm_uper_files_list(center: str = Query('', title='Center', description='Center of query location, in the format: lat,long',
                                                 regex='^(-?\\d+(\\.\\d+)?),\\s*(-?\\d+(\\.\\d+)?)$'),
                             distance: float = Query(
                                 0, title='Distance', description='Maximum distance (in km) from center location'),
@@ -175,13 +246,9 @@ def get_rsm_uper_files_list(request: Request,
                                 None, title='State', description='State'),
                             zip_code: str = Query(
                                 None, title='Zip Code', description='Zip code'),
+                            token_valid: bool = Depends(get_current_token)
                             ):
     file_type = 'rsm-uper'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     check_dist = False
     ref_loc = parseCoordinates(center)
@@ -206,13 +273,8 @@ def get_rsm_uper_files_list(request: Request,
 
 
 @app.get("/rsm-uper/{rsm_name}", tags=["uper-file"])
-def get_rsm_uper_file(request: Request, rsm_name: str):
+def get_rsm_uper_file(rsm_name: str, token_valid: bool = Depends(get_current_token)):
     file_type = 'rsm-uper'
-
-    auth_key = request.headers.get(authorization_key_header)
-    valid = authenticate_key(auth_key)
-    if not valid:
-        get_correct_response(auth_key)
 
     return getFilesListByName(file_type, rsm_name, container_name)
 
@@ -230,8 +292,8 @@ def get_correct_response(auth_key):
     if not auth_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No authentication key was specified. If you have a key, please add auth_key: **authentication_key** to your " +
-            f"request header. If you do not have a key, email {auth_email} to get a key.",
+            detail="No authentication key was specified. If you have a key, please add password: **authentication_key** to your " +
+            f"request body. If you do not have a key, email {auth_email} to get a key. For more info on how to use a key, please visit https://github.com/TonyEnglish/WZDC-Rest-API",
         )
     else:
         raise HTTPException(
@@ -241,7 +303,7 @@ def get_correct_response(auth_key):
 
 
 def find_key(key_hash):
-    cursor.execute(storedProcFind.format(key_hash))
+    cursor.execute(storedProcFindKey.format(key_hash))
 
     row = cursor.fetchone()
 
