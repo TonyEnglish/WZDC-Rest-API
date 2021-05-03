@@ -6,8 +6,12 @@ This APi is intended to make data collected by the [Work Zone Data Collection To
 [https://wzdc-rest-api.azurewebsites.net](https://wzdc-rest-api.azurewebsites.net)
 
 ## Example usage (powershell):
+### Get Access Token (valid for 30 minutes)
 `$response = Invoke-WebRequest 'https://wzdc-rest-api.azurewebsites.net/auth/token' -Method "POST" -Body @{"username"="user"; "password"="*api_key*"}; $response.Content`
+
 Example response: `{"access_token":"*access_token_key*","token_type":"Bearer","token_expires":"2021-05-03 19:35:22.509"}`
+
+### Make APi Request
 `$response = Invoke-WebRequest 'https://wzdc-rest-api.azurewebsites.net/wzdx/' -Headers @{"Authentication"="Bearer *access_token_key*"}; $response.Content`
 
 ### List files and Query
