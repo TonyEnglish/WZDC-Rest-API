@@ -36,7 +36,7 @@ Example response: `{"access_token":"*access_token_key*","token_type":"Bearer","t
 ## Running locally: 
 
 ### Install requirements
-`pipn install -r requirements.txt`
+`pip install -r requirements.txt`
 
 ### Configure environment variables
 `$env:auth_contact_email = "*contact_email*";
