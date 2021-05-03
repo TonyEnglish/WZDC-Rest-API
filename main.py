@@ -24,7 +24,7 @@ app = FastAPI(
     title="Work Zone Data Collection Tool Rest API",
     description='This API hosts work zone data collected by the WZDC ' +
     '(work zone data collection) tool. This data includes RSM messages, both in xml and uper (binary) formats. This API ' +
-    f'requires an APi key in the header. Contact <a href="mailto: {auth_email}">{auth_email}</a> for more information on how to acquire and use an API key.',
+    f'requires an APi key in the header. Contact <a href="mailto: {auth_email}">{auth_email}</a> or visit <a href="https://github.com/TonyEnglish/WZDC-Rest-API">https://github.com/TonyEnglish/WZDC-Rest-API</a> for more information on how to acquire and use an API key.',
     docs_url="/",
 )
 
@@ -91,7 +91,7 @@ def get_current_token(access_token: str = Depends(oauth2_scheme)):
     if not time_expires:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token not found",
+            detail="Token not found. Use /auth/token to get a token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     elif time_expires >= getCurrentTime():
@@ -292,8 +292,8 @@ def get_correct_response(auth_key):
     if not auth_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No authentication key was specified. If you have a key, please add auth_key: **authentication_key** to your " +
-            f"request header. If you do not have a key, email {auth_email} to get a key.",
+            detail="No authentication key was specified. If you have a key, please add password: **authentication_key** to your " +
+            f"request body. If you do not have a key, email {auth_email} to get a key. For more info on how to use a key, please visit https://github.com/TonyEnglish/WZDC-Rest-API",
         )
     else:
         raise HTTPException(
