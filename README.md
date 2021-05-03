@@ -11,7 +11,7 @@ This APi is intended to make data collected by the [Work Zone Data Collection To
 
 Example response: `{"access_token":"*access_token_key*","token_type":"Bearer","token_expires":"2021-05-03 19:35:22.509"}`
 
-### Make APi Request
+### Make API Request
 `$response = Invoke-WebRequest 'https://wzdc-rest-api.azurewebsites.net/wzdx/' -Headers @{"Authentication"="Bearer *access_token_key*"}; $response.Content`
 
 ### List files and Query
