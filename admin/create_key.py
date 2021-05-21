@@ -41,7 +41,7 @@ key_obj = {
     'api_key': key,
     'api_url': 'https://wzdc-rest-api.azurewebsites.net',
     'instructions': 'Save this key, it can never be recovered. Add this api key to the header of all requests, as auth_key',
-    'example_powershell_command': "$response = Invoke-WebRequest  https://wzdc-rest-api.azurewebsites.net/rsm/xml-list -Headers @{'auth_key'='" + key + "'}; $response.content"}
+    'example_powershell_command': '$response = Invoke-WebRequest "https: // wzdc-rest-api.azurewebsites.net/auth/token" -Method "POST" -Body @{"username"="user"; "password"="' + key + '"}; $response.Content}; $response.content'}
 key_file_name = 'wzdc_api_key_{0}.json'.format(
     datetime.now().strftime("%Y%m%d-%H%M%S"))
 with open('wzdc_api_key_{0}.json'.format(datetime.now().strftime("%Y%m%d-%H%M%S")), 'w+') as f:
