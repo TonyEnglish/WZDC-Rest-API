@@ -355,14 +355,16 @@ def getWZId(file_type, name):
     type_values = file_types_dict[file_type]
 
     begin_str = '{:s}--'.format(type_values['name_prefix'])
-    end_str = '--1-of-1.{:s}'.format(type_values['file_type'])
+    end_str_pattern = '--[0-9]*-of-[0-9]*?\.{:s}'.format(type_values['file_type'])
+    # end_str_len = '--1-of-[0-9].{:s}'.format(type_values['file_type'])
     alt_end_str = '.{:s}'.format(type_values['file_type'])
 
     name = name.split('/')[-1]
     if name.startswith(begin_str):
         name = name[len(begin_str):]
-    if name.endswith(end_str):
-        name = name[:-len(end_str)]
+    end_match_obj = re.search(end_str_pattern, name)
+    if end_match_obj != None:
+        name = name[:-len(end_match_obj[0])]
     elif name.endswith(alt_end_str):
         name = name[:-len(alt_end_str)]
     return name
@@ -405,14 +407,20 @@ def getFilesListByName(file_type, rsm_name, container_name):
 
     # For RSM files, multiple files can exist for a single work zone. Thus, these files have --i-of-N at the end of the name
     if file_type == 'rsm-xml' or file_type == 'rsm-uper':
-        initial_blob_name = '{0}--1-of-1.{1}'.format(
-            name_beginning, type_values['file_type'])
+        name_pattern = '{0}--1-of-[0-9]*\.{1}'.format(name_beginning, type_values['file_type'])
+        initial_blob_name = '{0}--1-of-1.{1}'.format(name_beginning, type_values['file_type']) #initialize this value, might be updated later
+        blob_list = blob_service_client.get_container_client(container_name).list_blobs()
+        for blob in blob_list:
+            if re.match(name_pattern, blob.name):
+                initial_blob_name = blob.name
+
     else:
         initial_blob_name = '{0}.{1}'.format(
             name_beginning, type_values['file_type'])
 
     blob_client = blob_service_client.get_blob_client(
         container=container_name, blob=initial_blob_name)
+    
     files = []
 
     try:
@@ -469,8 +477,10 @@ def getFilesByType(file_type, container_name):
     blob_names = []
     for blob in blob_list:
         if blob.metadata:
-            blob_names.append({'name': getWZId(file_type, blob.name),
-                               'id': blob.metadata.get('group_id', 'unknown')})
+            entry = {'name': getWZId(file_type, blob.name),
+                               'id': blob.metadata.get('group_id', 'unknown')}
+            if entry not in blob_names:
+                blob_names.append(entry)
 
     return {'query_parameters': None, 'data': blob_names}
 
@@ -495,8 +505,10 @@ def getFilesByMetadata(file_type, container_name, query_params):
                     valid = False
 
             if valid:
-                blob_names.append({'name': getWZId(file_type, blob.name),
-                                   'id': blob.metadata.get('group_id', 'unknown')})
+                entry = {'name': getWZId(file_type, blob.name),
+                                   'id': blob.metadata.get('group_id', 'unknown')}
+                if entry not in blob_names:
+                    blob_names.append(entry)
 
     formatted_query_params = []
     for param in query_params:
