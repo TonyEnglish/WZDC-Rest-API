@@ -1,9 +1,17 @@
 import os
 import pyodbc
+import sys
 import hashlib
 import uuid
 import math
 import re
+
+from starlette.responses import Response
+
+from loguru import logger
+
+from starlette.routing import Match
+
 from datetime import datetime, timedelta
 
 from models import Token
@@ -12,6 +20,12 @@ from fastapi import FastAPI, Header, HTTPException, status, Request, Query, Depe
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
+
+
+logger.remove()
+logger.add(sys.stdout, colorize=True,
+           format="<green>{time:HH:mm:ss}</green> | {level} | <level>{message}</level>")
+
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token/")
@@ -27,6 +41,44 @@ app = FastAPI(
     f'requires an APi key in the header. Contact <a href="mailto: {auth_email}">{auth_email}</a> or visit <a href="https://github.com/TonyEnglish/WZDC-Rest-API">https://github.com/TonyEnglish/WZDC-Rest-API</a> for more information on how to acquire and use an API key.',
     docs_url="/",
 )
+
+
+@app.middleware("http")
+async def log_middle(request: Request, call_next):
+    logger.debug(f"{request.method} {request.url}")
+    logger.info(f"{request.client}")
+    routes = request.app.router.routes
+    logger.debug("Params:")
+    for route in routes:
+        match, scope = route.matches(request)
+        if match == Match.FULL:
+            for name, value in scope["path_params"].items():
+                logger.debug(f"\t{name}: {value}")
+
+    logger.debug("Headers:")
+    for name, value in request.headers.items():
+        logger.debug(f"\t{name}: {value}")
+
+    response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
+async def log_request(request, call_next):
+    logger.info(f'{request.method} {request.url}')
+    response = await call_next(request)
+    logger.info(f'Status code: {response.status_code}')
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    # do something with body ...
+    return Response(
+        content=body,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type
+    )
+
 
 storage_conn_str = os.environ['storage_connection_string']
 sql_conn_str = os.environ['sql_connection_string']
@@ -84,11 +136,13 @@ def getExperitationTime():
 
 def get_current_token(access_token: str = Depends(oauth2_scheme)):
     key_hash = str(hashlib.sha256(access_token.encode()).hexdigest())
+    print(key_hash)
     row = find_token(key_hash)
     time_expires = None
     if row:
         time_expires = find_token(key_hash)[0]
     if not time_expires:
+        logger.error(f"Invalid Access Token: Token not found")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token not found. Use /auth/token to get a token",
@@ -97,6 +151,7 @@ def get_current_token(access_token: str = Depends(oauth2_scheme)):
     elif time_expires >= getCurrentTime():
         return True
     else:
+        logger.error(f"Invalid Access Token: Token has expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
@@ -121,8 +176,10 @@ def find_token(token_hash):
 
 @app.post("/auth/token/")
 async def get_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    logger.info(f"Request Username: {form_data.username}")
     valid = authenticate_key(form_data.password)
     if not valid:
+        logger.error(f"Unauthorized Request: Invalid Password Key")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Password Key",
@@ -355,7 +412,8 @@ def getWZId(file_type, name):
     type_values = file_types_dict[file_type]
 
     begin_str = '{:s}--'.format(type_values['name_prefix'])
-    end_str_pattern = '--[0-9]*-of-[0-9]*?\.{:s}'.format(type_values['file_type'])
+    end_str_pattern = '--[0-9]*-of-[0-9]*?\.{:s}'.format(
+        type_values['file_type'])
     # end_str_len = '--1-of-[0-9].{:s}'.format(type_values['file_type'])
     alt_end_str = '.{:s}'.format(type_values['file_type'])
 
@@ -407,9 +465,13 @@ def getFilesListByName(file_type, rsm_name, container_name):
 
     # For RSM files, multiple files can exist for a single work zone. Thus, these files have --i-of-N at the end of the name
     if file_type == 'rsm-xml' or file_type == 'rsm-uper':
-        name_pattern = '{0}--1-of-[0-9]*\.{1}'.format(name_beginning, type_values['file_type'])
-        initial_blob_name = '{0}--1-of-1.{1}'.format(name_beginning, type_values['file_type']) #initialize this value, might be updated later
-        blob_list = blob_service_client.get_container_client(container_name).list_blobs()
+        name_pattern = '{0}--1-of-[0-9]*\.{1}'.format(
+            name_beginning, type_values['file_type'])
+        # initialize this value, might be updated later
+        initial_blob_name = '{0}--1-of-1.{1}'.format(
+            name_beginning, type_values['file_type'])
+        blob_list = blob_service_client.get_container_client(
+            container_name).list_blobs()
         for blob in blob_list:
             if re.match(name_pattern, blob.name):
                 initial_blob_name = blob.name
@@ -420,7 +482,7 @@ def getFilesListByName(file_type, rsm_name, container_name):
 
     blob_client = blob_service_client.get_blob_client(
         container=container_name, blob=initial_blob_name)
-    
+
     files = []
 
     try:
@@ -478,7 +540,7 @@ def getFilesByType(file_type, container_name):
     for blob in blob_list:
         if blob.metadata:
             entry = {'name': getWZId(file_type, blob.name),
-                               'id': blob.metadata.get('group_id', 'unknown')}
+                     'id': blob.metadata.get('group_id', 'unknown')}
             if entry not in blob_names:
                 blob_names.append(entry)
 
@@ -506,7 +568,7 @@ def getFilesByMetadata(file_type, container_name, query_params):
 
             if valid:
                 entry = {'name': getWZId(file_type, blob.name),
-                                   'id': blob.metadata.get('group_id', 'unknown')}
+                         'id': blob.metadata.get('group_id', 'unknown')}
                 if entry not in blob_names:
                     blob_names.append(entry)
 
