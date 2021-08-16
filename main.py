@@ -1,5 +1,5 @@
 import os
-import pyodbc
+import pymssql
 import sys
 import hashlib
 import uuid
@@ -19,7 +19,6 @@ from models import Token
 from fastapi import FastAPI, Header, HTTPException, status, Request, Query, Depends
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from azure.storage.blob import BlobServiceClient
-from azure.core.exceptions import ResourceNotFoundError
 
 
 logger.remove()
@@ -80,13 +79,37 @@ async def log_request(request, call_next):
     )
 
 
+def parse_sql_connection_str(conn_str):
+    server = None
+    database = None
+    username = None
+    password = None
+    params = conn_str.split(';')
+    for param in params:
+        if param.startswith('Server='):
+            server = param.replace('Server=', '').replace(
+                'tcp:', '').split(',')[0]
+        if param.startswith('Database='):
+            database = param.replace('Database=', '')
+        if param.startswith('Uid='):
+            username = param.replace('Uid=', '')
+        if param.startswith('Pwd='):
+            password = param.replace('Pwd=', '')
+
+    if not server or not database or not username or not password:
+        raise RuntimeError("Invalid connection string")
+
+    return server, username, password, database
+
+
 storage_conn_str = os.environ['storage_connection_string']
 sql_conn_str = os.environ['sql_connection_string']
 blob_service_client = BlobServiceClient.from_connection_string(
     storage_conn_str)
 
-cnxn = pyodbc.connect(sql_conn_str)
-cursor = cnxn.cursor()
+
+conn = pymssql.connect(*parse_sql_connection_str(sql_conn_str))
+cursor = conn.cursor()
 
 storedProcFindKey = os.environ['stored_procedure_find_key']
 # exec create_token @token_hash = '{0}', @type = '{1}', @expires = '{2}'
@@ -198,7 +221,7 @@ async def get_token(form_data: OAuth2PasswordRequestForm = Depends()):
         token_hash, token.token_type, token.token_expires)
 
     cursor.execute(query)
-    cnxn.commit()
+    conn.commit()
 
     return token
 

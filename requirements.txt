@@ -1,6 +1,5 @@
 azure-storage-blob
 fastapi
-pyodbc
 azure-core
 gunicorn
 uvicorn
@@ -9,3 +8,4 @@ httptools
 python-multipart
 pydantic
 loguru
+pymssql
